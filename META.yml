@@ -21,4 +21,4 @@ requires:
   Digest::SHA: 0
   Math::BigInt: 1.991
   Test::More: 0
-version: 0.003
+version: 0.004
