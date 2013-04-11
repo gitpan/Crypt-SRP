@@ -33,11 +33,13 @@
       "runtime" : {
          "requires" : {
             "Digest::SHA" : "0",
+            "MIME::Base64" : "0",
             "Math::BigInt" : "1.991",
-            "Test::More" : "0"
+            "Storable" : "0",
+            "Test::More" : "0.88"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.004"
+   "version" : "0.006"
 }

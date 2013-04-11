@@ -5,16 +5,22 @@ package Crypt::SRP;
 use strict;
 use warnings;
 
-our $VERSION = '0.004';
+our $VERSION = '0.006';
 $VERSION = eval $VERSION;
 #BEWARE update also version in URLs mentioned in documentation below
 
 use Math::BigInt try => 'GMP';
 use Digest::SHA;
+use MIME::Base64 qw(encode_base64 decode_base64);
+use Config;
+use Storable qw(nfreeze thaw);
 
 ### predefined parameters - see http://tools.ietf.org/html/rfc5054 appendix A
 
-use constant predefined_groups => {
+use constant _state_vars  => [ qw(Bytes_I Bytes_K Bytes_M1 Bytes_M2 Bytes_P Bytes_s Num_a Num_A Num_b Num_B Num_k Num_S Num_u Num_v Num_x) ];
+use constant _static_vars => [ qw(HASH INTERLEAVED GROUP FORMAT SALT_LEN) ];
+
+use constant _predefined_groups => {
     'RFC5054-1024bit' => {
         g => 2,
         N => q[
@@ -175,77 +181,104 @@ use constant predefined_groups => {
 ### class constructor
 
 sub new {
-  my ($class, $group_params, $hash, $interleaved) = @_;
+  my ($class, $group, $hash, $format, $interleaved, $default_salt_len) = @_;
   my $self = bless {}, $class;
 
-  # setup N and g values
-  if ($group_params =~ /RFC5054-(1024|1536|2048|3072|4096|6144|8192)bit$/) {
-    my $str = predefined_groups->{$group_params}->{N};
-    $str =~ s/[\r\n\s]*//sg;
-    $str = "0x$str" unless $str =~ /^0x/;
-    $self->{Num_N} = Math::BigInt->from_hex($str);
-    $self->{Num_g} = Math::BigInt->new(predefined_groups->{$group_params}->{g});
-    $self->{N_LENGTH} = length(_bignum2bytes($self->{Num_N}));
-  }
-  else {
-    die "FATAL: invalid group_params '$group_params'";
-  }
-
-  # setup and test hash function
-  $self->{HASH} = $hash;
+  $self->{GROUP} = $group || 'RFC5054-2048bit';
+  $self->{HASH} = $hash || 'SHA256';
+  $self->{FORMAT} = $format || 'raw';
   $self->{INTERLEAVED} = $interleaved || 0;
-  die "FATAL: invalid hash '$hash'" unless defined $self->_HASH("test");
+  $self->{SALT_LEN} = $default_salt_len || 32;
 
+  $self->_initialize();
   return $self;
 }
 
 ### class PUBLIC methods
 
+sub reset {
+  my ($self, $group, $hash, $format, $interleaved, $default_salt_len) = @_;
+
+  $self->{GROUP} = $group if defined $group;
+  $self->{HASH} = $hash if defined $hash;
+  $self->{FORMAT} = $format if defined $format;
+  $self->{INTERLEAVED} = $interleaved if defined $interleaved;
+  $self->{SALT_LEN} = $default_salt_len if defined $default_salt_len;
+
+  delete $self->{$_} for (@{_state_vars()});
+
+  $self->_initialize();
+  return $self;
+}
+
+sub dump {
+  my $self = shift;
+  my $state = [ map {$self->{$_}} (@{_state_vars()}, @{_static_vars()}) ];
+  return encode_base64(nfreeze($state), "");
+}
+
+sub load {
+  my ($self, $state) = @_;
+  $self->reset;
+  my $s = thaw(decode_base64($state));
+  my @list = (@{_state_vars()}, @{_static_vars()});
+  $self->{$list[$_]} = $s->[$_] for 0..$#list;
+  $self->_initialize();
+  return $self;
+}
+
 sub client_init {
   my ($self, $Bytes_I, $Bytes_P, $Bytes_s, $Bytes_B, $Bytes_A, $Bytes_a) = @_;
+  # do not unformat $Bytes_I, $Bytes_P
   $self->{Bytes_I} = $Bytes_I;
   $self->{Bytes_P} = $Bytes_P;
-  $self->{Bytes_s} = $Bytes_s;
+  $self->{Bytes_s} = $self->_unformat($Bytes_s);
   $self->{Num_x}   = $self->_calc_x();            # x = HASH(s | HASH(I | ":" | P))
   #optional params
-  $self->{Num_B}   = _bytes2bignum($Bytes_B) if defined $Bytes_B;
-  $self->{Num_A}   = _bytes2bignum($Bytes_A) if defined $Bytes_A;
-  $self->{Num_a}   = _bytes2bignum($Bytes_a) if defined $Bytes_a;
+  $self->{Num_B}   = _bytes2bignum($self->_unformat($Bytes_B)) if defined $Bytes_B;
+  $self->{Num_A}   = _bytes2bignum($self->_unformat($Bytes_A)) if defined $Bytes_A;
+  $self->{Num_a}   = _bytes2bignum($self->_unformat($Bytes_a)) if defined $Bytes_a;
+  return $self;
 }
 
 sub server_init {
   my ($self, $Bytes_I, $Bytes_v, $Bytes_s, $Bytes_A, $Bytes_B, $Bytes_b) = @_;
+  # do not unformat $Bytes_I
   $self->{Bytes_I} = $Bytes_I;
-  $self->{Num_v}   = _bytes2bignum($Bytes_v);
-  $self->{Bytes_s} = $Bytes_s;
+  $self->{Num_v}   = _bytes2bignum($self->_unformat($Bytes_v));
+  $self->{Bytes_s} = $self->_unformat($Bytes_s);
   #optional params
-  $self->{Num_A}   = _bytes2bignum($Bytes_A) if defined $Bytes_A;
-  $self->{Num_B}   = _bytes2bignum($Bytes_B) if defined $Bytes_B;
-  $self->{Num_b}   = _bytes2bignum($Bytes_b) if defined $Bytes_b;
+  $self->{Num_A}   = _bytes2bignum($self->_unformat($Bytes_A)) if defined $Bytes_A;
+  $self->{Num_B}   = _bytes2bignum($self->_unformat($Bytes_B)) if defined $Bytes_B;
+  $self->{Num_b}   = _bytes2bignum($self->_unformat($Bytes_b)) if defined $Bytes_b;
+  return $self;
 }
 
 sub client_compute_A {
   my ($self, $a_len) = @_;
   $self->{Num_a} = $self->_generate_SRP_a($a_len); # a = random() // a has min 256 bits, a < N
   $self->{Num_A} = $self->_calc_A;                 # A = g^a % N
-  return (_bignum2bytes($self->{Num_A}), _bignum2bytes($self->{Num_a}));
+  my $Bytes_A = _bignum2bytes($self->{Num_A});
+  my $Bytes_a = _bignum2bytes($self->{Num_a});  
+  return ($self->_format($Bytes_A), $self->_format($Bytes_a));
 }
 
 sub client_compute_M1 {
-  my $self = shift;
+  my ($self) = @_;
   $self->{Num_u}    = $self->_calc_u;        # u = HASH(PAD(A) | PAD(B))
   $self->{Num_k}    = $self->_calc_k;        # k = HASH(N | PAD(g))
   $self->{Num_S}    = $self->_calc_S_client; # S = (B - (k * ((g^x)%N) )) ^ (a + (u * x)) % N
   $self->{Bytes_K}  = $self->_calc_K;        # K = HASH( PAD(S) )
   $self->{Bytes_M1} = $self->_calc_M1;       # M1 = HASH( HASH(N) XOR HASH(PAD(g)) | HASH(I) | s | PAD(A) | PAD(B) | K )
-  return $self->{Bytes_M1};
+  return $self->_format($self->{Bytes_M1});
 }
 
 sub client_verify_M2 {
   my ($self, $Bytes_M2) = @_;
+  $Bytes_M2 = $self->_unformat($Bytes_M2);
   my $M2 = $self->_calc_M2;                  # M2 = HASH( PAD(A) | M1 | K )
   return 0 unless defined $Bytes_M2 && defined $M2 && $Bytes_M2 eq $M2;
-  $self->{Bytes_M2} = $Bytes_M2;
+  $self->{Bytes_M2} = $M2;
   return 1;
 }
 
@@ -254,92 +287,115 @@ sub server_compute_B {
   $self->{Num_b} = $self->_generate_SRP_b($b_len); # b = random() // b has min 256 bits, b < N
   $self->{Num_k} = $self->_calc_k;                 # k = HASH(N | PAD(g))
   $self->{Num_B} = $self->_calc_B;                 # B = ( k*v + (g^b % N) ) % N
-  return (_bignum2bytes($self->{Num_B}), _bignum2bytes($self->{Num_b}));
+  my $Bytes_B = _bignum2bytes($self->{Num_B});
+  my $Bytes_b = _bignum2bytes($self->{Num_b});
+  return ($self->_format($Bytes_B), $self->_format($Bytes_b));
+}
+
+sub server_fake_B_s {
+  my ($self, $I, $nonce, $s_len) = @_;
+  return unless $I;
+  $s_len ||= $self->{SALT_LEN};
+  # default $nonce should be fixed for repeated invocation on the same machine (in different processes)
+  $nonce ||= join(":", @INC, $Config{archname}, $Config{myuname}, $^X, $^V, $<, $(, $ENV{PATH}, $ENV{HOSTNAME}, $ENV{HOME});
+  my $b = _bytes2bignum(_random_bytes(6)); #XXX maybe too short
+  my $B = _bignum2bytes(Math::BigInt->new($self->{Num_g})->copy->bmodpow($b, $self->{Num_N}));
+  my $s = '';
+  my $i = 1;
+  $s .= Digest::SHA::hmac_sha256($I, $nonce.$i++) while length($s) < $s_len;
+  $s = substr($s, 0, $s_len);
+  return ($self->_format($B), $self->_format($s));
 }
 
 sub server_verify_M1 {
   my ($self, $Bytes_M1) = @_;
+  $Bytes_M1 = $self->_unformat($Bytes_M1);
   $self->{Num_u}   = $self->_calc_u;         # u = HASH(PAD(A) | PAD(B))
   $self->{Num_S}   = $self->_calc_S_server;  # S = ( (A * ((v^u)%N)) ^ b) % N
   $self->{Bytes_K} = $self->_calc_K;         # K = HASH( PAD(S) )
   my $M1 = $self->_calc_M1;                  # M1 = HASH( HASH(N) XOR HASH(PAD(g)) | HASH(I) | s | PAD(A) | PAD(B) | K )
   return 0 unless $Bytes_M1 eq $M1;
-  $self->{Bytes_M1} = $Bytes_M1;
+  $self->{Bytes_M1} = $M1;
   return 1;
 }
 
 sub server_compute_M2 {
-  my $self = shift;
+  my ($self) = @_;
   $self->{Bytes_M2} = $self->_calc_M2;       # M2 = HASH( PAD(A) | M1 | K )
-  return $self->{Bytes_M2};
+  return $self->_format($self->{Bytes_M2});
 }
 
 sub get_secret_K {
-  my $self = shift;
-  return $self->{Bytes_K};
+  my ($self) = @_;
+  return $self->_format($self->{Bytes_K});
 }
 
 sub get_secret_S {
-  my $self = shift;
-  return _bignum2bytes($self->{Num_S});
+  my ($self) = @_;
+  return $self->_format(_bignum2bytes($self->{Num_S}));
 }
 
 sub compute_verifier {
   my ($self, $Bytes_I, $Bytes_P, $Bytes_s) = @_;
+  $Bytes_s = $self->_unformat($Bytes_s);
+  # do not unformat $Bytes_I, $Bytes_P
   $self->client_init($Bytes_I, $Bytes_P, $Bytes_s);
-  return $self->_calc_v;
+  return $self->_format($self->_calc_v);
 }
 
 sub compute_verifier_and_salt {
   my ($self, $Bytes_I, $Bytes_P, $salt_len) = @_;
-  $salt_len ||= 32;
-  my $Bytes_s = $self->random_bytes($salt_len);
-  $self->client_init($Bytes_I, $Bytes_P, $Bytes_s);
-  return ($Bytes_s, $self->_calc_v);
+  # do not unformat $Bytes_I, $Bytes_P
+  $salt_len ||= $self->{SALT_LEN};
+  my $Bytes_s = _random_bytes($salt_len);
+  $self->client_init($Bytes_I, $Bytes_P, $self->_format($Bytes_s));
+  return ($self->_format($self->_calc_v), $self->_format($Bytes_s));
 }
 
-sub validate_A_or_B {
-  my ($self, $bytes) = @_;
-  return 0 unless $bytes && $self->{Num_N};
-  my $num = _bytes2bignum($bytes);
-  return 0 unless $num;
-  return 0 if $num->bmod($self->{Num_N}) == 0; # num % N == 0
+sub server_verify_A {
+  my ($self, $Bytes_A) = @_;
+  $Bytes_A = $self->_unformat($Bytes_A);
+  return 0 unless $self->_validate_A_or_B($Bytes_A);
+  $self->{Num_A} = _bytes2bignum($Bytes_A);
+  return 1;
+}
+
+sub client_verify_B {
+  my ($self, $Bytes_B) = @_;
+  $Bytes_B = $self->_unformat($Bytes_B);
+  return 0 unless $self->_validate_A_or_B($Bytes_B);
+  $self->{Num_B} = _bytes2bignum($Bytes_B);
   return 1;
 }
 
 sub random_bytes {
-  my ($self, $length) = @_;
-  $length ||= 32;
-  my $rv;
-
-  if (eval {require Crypt::OpenSSL::Random}) {
-    if (Crypt::OpenSSL::Random::random_status()) {
-      $rv = Crypt::OpenSSL::Random::random_bytes($length);
-    }
-  }
-  elsif (eval {require Net::SSLeay}) {
-    if (Net::SSLeay::RAND_status() == 1) {
-      if (Net::SSLeay::RAND_bytes($rv, $length) != 1) {
-        $rv = undef;
-      }
-    }
-  }
-  elsif (eval {require Crypt::Random}) {
-    $rv = Crypt::Random::makerandom_octet(Length=>$length);
-  }
-  elsif (eval {require Bytes::Random::Secure}) {
-    $rv = Bytes::Random::Secure::random_bytes(32);
-  }
-
-  if (!defined $rv)  {
-    warn "WARNING: Generating random bytes via insecure rand()\n";
-    $rv = pack('C*', map(int(rand(256)), 1..$length));
-  }
-
-  return $rv
+  my ($self, $len) = @_;
+  return _random_bytes($len) unless ref $self; # Crypt::SRP->random_bytes(32);
+  return $self->_format(_random_bytes($len));  # $srp->random_bytes(32);
 }
 
 ### class PRIVATE methods
+
+sub _initialize {
+  my $self = shift;
+
+  # setup N and g values
+  if ($self->{GROUP} =~ /RFC5054-(1024|1536|2048|3072|4096|6144|8192)bit$/) {
+    my $str = _predefined_groups->{$self->{GROUP}}->{N};
+    $str =~ s/[\r\n\s]*//sg;
+    $str = "0x$str" unless $str =~ /^0x/;
+    $self->{Num_N} = Math::BigInt->from_hex($str);
+    $self->{Num_g} = Math::BigInt->new(_predefined_groups->{$self->{GROUP}}->{g});
+    $self->{N_LENGTH} = length(_bignum2bytes($self->{Num_N}));
+  }
+  else {
+    die "FATAL: invalid group_params '$self->{GROUP}'";
+  }
+
+  # test hash function
+  die "FATAL: invalid hash '$self->{HASH}'" unless defined $self->_HASH("test");
+  return $self;
+}
 
 sub _HASH {
   my ($self, $data) = @_;
@@ -505,7 +561,47 @@ sub _generate_SRP_b {
   $self->_generate_SRP_a_or_b($b_len, $self->{predefined_b});
 }
 
+sub _validate_A_or_B {
+  my ($self, $bytes) = @_;
+  return 0 unless $bytes && $self->{Num_N};
+  my $num = _bytes2bignum($bytes);
+  return 0 unless $num;
+  return 0 if $num->bmod($self->{Num_N}) == 0; # num % N == 0
+  return 1;
+}
+
 ### helper functions - NOT METHODS!!!
+
+sub _random_bytes {
+  my $length = shift || 32;
+  my $rv;
+
+  if (eval {require Crypt::OpenSSL::Random}) {
+    if (Crypt::OpenSSL::Random::random_status()) {
+      $rv = Crypt::OpenSSL::Random::random_bytes($length);
+    }
+  }
+  elsif (eval {require Net::SSLeay}) {
+    if (Net::SSLeay::RAND_status() == 1) {
+      if (Net::SSLeay::RAND_bytes($rv, $length) != 1) {
+        $rv = undef;
+      }
+    }
+  }
+  elsif (eval {require Crypt::Random}) {
+    $rv = Crypt::Random::makerandom_octet(Length=>$length);
+  }
+  elsif (eval {require Bytes::Random::Secure}) {
+    $rv = Bytes::Random::Secure::random_bytes($length);
+  }
+
+  if (!defined $rv)  {
+    warn "WARNING: Generating random bytes via insecure rand()\n";
+    $rv = pack('C*', map(int(rand(256)), 1..$length));
+  }
+
+  return $rv;
+}
 
 sub _bignum2bytes {
   my $bignum = shift;
@@ -520,6 +616,44 @@ sub _bytes2bignum {
   my $bytes = shift;
   return undef unless defined $bytes;
   return Math::BigInt->from_hex('0x'.unpack("H*", $bytes));
+}
+
+sub _format {
+  my ($self, $bytes, $format) = @_;
+  $format ||= $self->{FORMAT};
+  return undef                     unless defined $bytes;
+  return $bytes                    if $format eq 'raw';
+  return unpack("H*", $bytes)      if $format eq 'hex';
+  return encode_base64($bytes, "") if $format eq 'base64';
+  return _base64url_enc($bytes)    if $format eq 'base64url';
+  return undef;
+}
+
+sub _unformat {
+  my ($self, $input, $format) = @_;
+  $format ||= $self->{FORMAT};
+  return undef                  unless defined $input;
+  return $input                 if $format eq 'raw';
+  return pack("H*", $input)     if $format eq 'hex';
+  return decode_base64($input)  if $format eq 'base64';
+  return _base64url_dec($input) if $format eq 'base64url';
+  return undef;
+}
+
+# RFC 4648 Base64 URL Safe - https://tools.ietf.org/html/rfc4648#page-7
+sub _base64url_enc {
+    my $data = shift;
+    my $b64 = encode_base64($data, '');
+    $b64 =~ s/=+\z//;
+    $b64 =~ tr[+/][-_];
+    return $b64;
+}
+
+sub _base64url_dec {
+    my $b64 = shift;
+    $b64 =~ tr[-_][+/];
+    $b64 .= '=' while length($b64) % 4;
+    return decode_base64($b64);
 }
 
 1;
@@ -548,7 +682,7 @@ Example 1 - SRP login handshake:
                            my $v = $USERS{$I}->{verifier};
                            my $s = $USERS{$I}->{salt};
                            my $srv = Crypt::SRP->new('RFC5054-1024bit', 'SHA1');
-                           return unless $srv->validate_A_or_B($A);
+                           return unless $srv->server_verify_A($A);
                            $srv->server_init($I, $v, $s);
                            my ($B, $b) = $srv->server_compute_B;
                            my $token = $srv->random_bytes(32);
@@ -557,8 +691,8 @@ Example 1 - SRP login handshake:
  #  response[1] from server:  <--- ($B, $s, $token) <---
 
  ###CLIENT###
- return unless $cli->validate_A_or_B($B);
- $cli->client_init($I, $P, $s, $B);
+ return unless $cli->client_verify_B($B);
+ $cli->client_init($I, $P, $s);
  my $M1 = $cli->client_compute_M1;
 
  #  request[2] to server:  ---> /auth/srp_step2 ($M1, $token) --->
@@ -594,7 +728,7 @@ Example 2 - creating a new user and his/her password verifier:
  my $I = '...'; # login entered by user
  my $P = '...'; # password entered by user
  my $cli = Crypt::SRP->new('RFC5054-1024bit', 'SHA1');
- my ($s, $v) = $cli->compute_verifier_and_salt($I, $P);
+ my ($v, $s) = $cli->compute_verifier_and_salt($I, $P);
 
  #  request to server:  ---> /auth/create_user [$I, $s, $v] --->
 
@@ -605,8 +739,9 @@ Example 2 - creating a new user and his/her password verifier:
                            $USERS{$I}->{verifier} = $v;
 
 Working sample implementation of SRP authentication on client and server side is available in C<examples>
-subdirectory (L<srp_server.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.004/examples/srp_server.pl>,
-L<srp_client.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.004/examples/srp_client.pl>).
+subdirectory: 
+L<srp_server.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_server.pl>,
+L<srp_client.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_client.pl>.
 
 =head1 DESCRIPTION
 
@@ -650,26 +785,63 @@ Login and password ($I, $P) can be ASCII strings (without utf8 flag) or raw octe
 characters in login and/or password then you have to encode them from Perl's internal from like this:
 C<$I = encode('utf8', $I)> or C<$P = encode('utf8', $P)>
 
-All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are raw octets (no BigInts no strings with utf8 flag).
+All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are by defaults raw octets (no BigInts no strings
+with utf8 flag). However if you set new's optional parameter C<$format> to C<'hex'>, C<'base64'> or C<'base64url'> SRP
+related input parameters (not C<$I> or C<$P>) are expected in given encoding and return values are coverted into
+the same enconding as well.
 
 =over
 
 =item * new
 
- my $srp = Crypt::SRP->new($group, $hash, $interleaved);
- # $group ... 'RFC5054-1024bit' or 'RFC5054-1536bit' or 'RFC5054-2048bit' or
+ my $srp = Crypt::SRP->new();
+ #or
+ my $srp = Crypt::SRP->new($group, $hash, $format, $interleaved, $default_salt_len);
+ # $group ... (optional, DEFAULT='RFC5054-2048bit') 
+ #            'RFC5054-1024bit' or 'RFC5054-1536bit' or 'RFC5054-2048bit' or
  #            'RFC5054-3072bit' or 'RFC5054-4096bit' or 'RFC5054-6144bit' or
  #            'RFC5054-8192bit' see rfc5054 (appendix A)
- # $hash  ... 'SHA1' or 'SHA256' or 'SHA384' or 'SHA512'
- # $interleaved ... (optional, DEFAULT = 0) indicates whether the final shared 
+ # $hash  ... (optional, DEFAULT='SHA256') 
+ #            'SHA1' or 'SHA256' or 'SHA384' or 'SHA512'
+ # $format ... (optional, DEFAULT='raw') 
+ #             'raw' or 'hex' or 'base64' or 'base64url'
+ # $interleaved ... (optional, DEFAULT=0) indicates whether the final shared 
  #                  secret K will be computed as SHAx(S) or SHAx_Interleaved(S)
  #                  see rfc2945 (3.1 Interleaved SHA)
+ # $default_salt_len ... (optional, DEFAULT=32)
+ #                        default length (in bytes) for generated salt
+
+=item * reset
+
+ $srp->reset();
+ #or
+ $srp->reset($group, $hash, $format, $interleaved, $default_salt_len);  # see new()
+ 
+ # returns $srp (itself)
+
+=item * dump
+
+ my $serialized_state = $srp->dump();
+
+=item * load
+
+ $srp->load($serialized_state);
+
+=item * compute_verifier
+
+ my $v = $srp->compute_verifier($I, $P, $s);
+
+=item * compute_verifier_and_salt
+
+ my ($v, $s) = $srp->compute_verifier_and_salt($I, $P); 
+ #or
+ my ($v, $s) = $srp->compute_verifier_and_salt($I, $P, $s_len);
 
 =item * client_init
 
  $srp->client_init($I, $P, $s, $B);
- #or
- $srp->client_init($I, $P, $s, $B, $A, $a);
+ 
+ # returns $srp (itself)
 
 =item * client_compute_A
 
@@ -679,33 +851,36 @@ All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are raw oct
 
 =item * client_compute_M1
 
- my $M1 = $srp->client_compute_M1($B)
+ my $M1 = $srp->client_compute_M1($B);
 
 =item * client_verify_M2
 
  my $valid = $srp->client_verify_M2($M2);
 
-=item * compute_verifier
+=item * client_verify_B
 
- my $v = $srp->compute_verifier($I, $P, $s)
-
-=item * compute_verifier_and_salt
-
- my ($s, $v) = $srp->compute_verifier_and_salt($I, $P);
- #or
- my ($s, $v) = $srp->compute_verifier_and_salt($I, $P, $s_len)
+ my $valid = client_verify_B($B);
 
 =item * server_init
 
  $srp->server_init($I, $v, $s);
  #or
  $srp->server_init($I, $v, $s, $A, $B, $b);
+ # returns $srp (itself)
 
 =item * server_compute_B
 
  my ($B, $b) = $srp->server_compute_B();
  #or
  my ($B, $b) = $srp->server_compute_B($b_len);
+
+=item * server_fake_B_s
+
+ my ($B, $s) = $srp->server_fake_B_s($I);
+ #or
+ my ($B, $s) = $srp->server_fake_B_s($I, $nonce);
+ #or
+ my ($B, $s) = $srp->server_fake_B_s($I, $nonce, $s_len);
 
 =item * server_verify_M1
 
@@ -714,6 +889,10 @@ All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are raw oct
 =item * server_compute_M2
 
  my $M2 = $srp->server_compute_M2();
+ 
+=item * server_verify_A
+
+ my $valid = server_verify_A($A);
 
 =item * get_secret_S
 
@@ -723,17 +902,15 @@ All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are raw oct
 
  my $K = $srp->get_secret_K();
 
-=item * validate_A_or_B
-
- my $valid = validate_A_or_B($A);
- #or
- my $valid = validate_A_or_B($B);
-
 =item * random_bytes
 
- my $rand = $srp->random_bytes();
+ my $rand = $srp->random_bytes();  # $rand formated according to $format passed to new()
  #or
  my $rand = $srp->random_bytes($len);
+ 
+ my $rand = Crypt::SRP->random_bytes();  # $rand always raw bytes
+ #or
+ my $rand = Crypt::SRP->random_bytes($len);
 
 =back
 

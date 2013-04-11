@@ -19,6 +19,8 @@ no_index:
     - inc
 requires:
   Digest::SHA: 0
+  MIME::Base64: 0
   Math::BigInt: 1.991
-  Test::More: 0
-version: 0.004
+  Storable: 0
+  Test::More: 0.88
+version: 0.006

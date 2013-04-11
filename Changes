@@ -1,5 +1,20 @@
 Changes for Crypt::SRP
 
+0.006   2013/04/11
+        - ($s, $v)=compute_verifier_and_salt
+          >>> ($v,$s)=compute_verifier_and_salt
+        - new($group, $hash, $interleaved, $format, $default_salt_len)
+          >>> new($group, $hash, $format, $interleaved, $default_salt_len)
+        - added server_client.t
+
+0.005   2013/04/10
+        - added reset(), dump(), load(), server_fake_B_s()
+        - server_init() and client_init() now return $self
+        - removed validate_A_or_B
+        - added server_verify_A() + client_verify_B()
+        - we support $self->random_bytes and Crypt::SRP->random_bytes
+        - new's param $format + $default_salt_len
+
 0.004   2013/04/08
         - fixed bug in _calc_K
         - new's param $interleaved
