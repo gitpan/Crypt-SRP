@@ -23,4 +23,4 @@ requires:
   Math::BigInt: 1.991
   Storable: 0
   Test::More: 0.88
-version: 0.006
+version: 0.007
