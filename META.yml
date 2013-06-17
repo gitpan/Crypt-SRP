@@ -23,5 +23,5 @@ requires:
   Math::BigInt: 1.991
   Storable: 0
   Test::More: 0.88
-  perl: 5.008008
-version: 0.009
+  perl: 5.006
+version: 0.010

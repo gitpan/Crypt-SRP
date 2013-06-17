@@ -5,7 +5,7 @@ package Crypt::SRP;
 use strict;
 use warnings;
 
-our $VERSION = '0.009';
+our $VERSION = '0.010';
 $VERSION = eval $VERSION;
 #BEWARE update also version in URLs mentioned in documentation below
 
@@ -399,7 +399,7 @@ sub _initialize {
 
 sub _HASH {
   my ($self, $data) = @_;
-  utf8::downgrade($data); #XXX-FIXME just workaround as Digest::SHA is buggy when UTF8 flag is on
+  #utf8::downgrade($data); #XXX-FIXME just workaround as Digest::SHA is buggy when UTF8 flag is on
   return Digest::SHA::sha1($data)   if $self->{HASH} eq 'SHA1';
   return Digest::SHA::sha256($data) if $self->{HASH} eq 'SHA256';
   return Digest::SHA::sha384($data) if $self->{HASH} eq 'SHA384';

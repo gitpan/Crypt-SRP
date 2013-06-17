@@ -5,6 +5,7 @@ lib/Crypt/SRP.pm
 LICENSE
 Makefile.PL
 MANIFEST			This list of files
+README
 t/compile.t
 t/octets2bigint.t
 t/server_client.t
