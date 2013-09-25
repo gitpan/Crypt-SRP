@@ -5,7 +5,7 @@ package Crypt::SRP;
 use strict;
 use warnings;
 
-our $VERSION = '0.010';
+our $VERSION = '0.012';
 $VERSION = eval $VERSION;
 #BEWARE update also version in URLs mentioned in documentation below
 
@@ -298,7 +298,7 @@ sub server_fake_B_s {
   $s_len ||= $self->{SALT_LEN};
   # default $nonce should be fixed for repeated invocation on the same machine (in different processes)
   $nonce ||= join(":", @INC, $Config{archname}, $Config{myuname}, $^X, $^V, $<, $(, $ENV{PATH}, $ENV{HOSTNAME}, $ENV{HOME});
-  my $b = _bytes2bignum(_random_bytes(6)); #XXX maybe too short
+  my $b = _bytes2bignum(_random_bytes(6)); #NOTE: maybe too short but we do not want to waste too much CPU on modpow
   my $B = _bignum2bytes(Math::BigInt->new($self->{Num_g})->copy->bmodpow($b, $self->{Num_N}));
   my $s = '';
   my $i = 1;
@@ -399,7 +399,6 @@ sub _initialize {
 
 sub _HASH {
   my ($self, $data) = @_;
-  #utf8::downgrade($data); #XXX-FIXME just workaround as Digest::SHA is buggy when UTF8 flag is on
   return Digest::SHA::sha1($data)   if $self->{HASH} eq 'SHA1';
   return Digest::SHA::sha256($data) if $self->{HASH} eq 'SHA256';
   return Digest::SHA::sha384($data) if $self->{HASH} eq 'SHA384';
@@ -480,7 +479,7 @@ sub _calc_S_client {
   my $tmp1 = Math::BigInt->new($self->{Num_g})->copy->bmodpow($self->{Num_x}, $self->{Num_N})->bmul($self->{Num_k})->bmod($self->{Num_N});
   my $tmp2 = Math::BigInt->new($self->{Num_u})->copy->bmul($self->{Num_x})->badd($self->{Num_a});
   my $tmp3 = Math::BigInt->new($self->{Num_B})->copy->bsub($tmp1);
-  my $Num_S = $tmp3->bmodpow($tmp2, $self->{Num_N}); #XXX this fails on Math-BigInt before 1.991
+  my $Num_S = $tmp3->bmodpow($tmp2, $self->{Num_N}); #NOTE: this fails on Math-BigInt before 1.991
   return $Num_S;
 }
 
@@ -643,8 +642,8 @@ sub _unformat {
 sub _unhex {
   my $hex = shift;
   $hex =~ s/^0x//;                    # strip leading '0x...'
-  $hex = "0$hex" if length($hex) % 2; # add leading '0' if neccessary
-  return pack("H*", $hex);  
+  $hex = "0$hex" if length($hex) % 2; # add leading '0' if necessary
+  return pack("H*", $hex);
 }
 
 # RFC 4648 Base64 URL Safe - https://tools.ietf.org/html/rfc4648#page-7
@@ -747,8 +746,8 @@ Example 2 - creating a new user and his/her password verifier:
 
 Working sample implementation of SRP authentication on client and server side is available in C<examples>
 subdirectory:
-L<srp_server.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_server.pl>,
-L<srp_client.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_client.pl>.
+L<srp_server.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.012/examples/srp_server.pl>,
+L<srp_client.pl|https://metacpan.org/source/MIK/Crypt-SRP-0.012/examples/srp_client.pl>.
 
 =head1 DESCRIPTION
 
@@ -794,7 +793,7 @@ Login and password ($I, $P) can be ASCII strings (without utf8 flag) or raw octe
 characters in login and/or password then you have to encode them from Perl's internal from like this:
 C<$I = encode('utf8', $I)> or C<$P = encode('utf8', $P)>
 
-All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are by defaults raw octets (no BigInts no strings
+All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are by defaults raw octets (no BigInts, no strings
 with utf8 flag). However if you set new's optional parameter C<$format> to C<'hex'>, C<'base64'> or C<'base64url'> SRP
 related input parameters (not C<$I> or C<$P>) are expected in given encoding and return values are converted into
 the same encoding as well.
@@ -935,4 +934,4 @@ This program is free software; you can redistribute it and/or modify it under th
 
 =head1 COPYRIGHT
 
-Copyright (c) 2013 DCIT, a.s. L<http://www.dcit.cz> / Karel Miko
+Copyright (c) 2012 DCIT, a.s. L<http://www.dcit.cz> / Karel Miko

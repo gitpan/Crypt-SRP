@@ -1,5 +1,9 @@
 Changes for Crypt::SRP
 
+0.012   2013/09/25
+        - documentation tweaks & cosmetics
+        - URL to github repo
+
 0.010   2013/06/17
         - adding README
         - removing utf8::downgrade workaround

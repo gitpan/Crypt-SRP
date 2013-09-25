@@ -76,9 +76,9 @@ SYNOPSIS
 
     Working sample implementation of SRP authentication on client and server
     side is available in "examples" subdirectory: srp_server.pl
-    <https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_server.pl>
+    <https://metacpan.org/source/MIK/Crypt-SRP-0.012/examples/srp_server.pl>
     , srp_client.pl
-    <https://metacpan.org/source/MIK/Crypt-SRP-0.005/examples/srp_client.pl>
+    <https://metacpan.org/source/MIK/Crypt-SRP-0.012/examples/srp_client.pl>
     .
 
 DESCRIPTION
@@ -118,7 +118,7 @@ METHODS
     encode('utf8', $I)" or "$P = encode('utf8', $P)"
 
     All SRP related variables ($s, $v, $A, $a, $B, $b, $M1, $M2, $S, $K) are
-    by defaults raw octets (no BigInts no strings with utf8 flag). However
+    by defaults raw octets (no BigInts, no strings with utf8 flag). However
     if you set new's optional parameter $format to 'hex', 'base64' or
     'base64url' SRP related input parameters (not $I or $P) are expected in
     given encoding and return values are converted into the same encoding as
@@ -255,5 +255,5 @@ LICENSE
     under the same terms as Perl itself.
 
 COPYRIGHT
-    Copyright (c) 2013 DCIT, a.s. <http://www.dcit.cz> / Karel Miko
+    Copyright (c) 2012 DCIT, a.s. <http://www.dcit.cz> / Karel Miko
 
