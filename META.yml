@@ -26,4 +26,4 @@ requires:
   perl: 5.006
 resources:
   repository: https://github.com/DCIT/perl-Crypt-SRP
-version: 0.013
+version: 0.014
